@@ -47,6 +47,15 @@
   }
   #f-artista:focus{outline:1px solid var(--musgo); border-color:var(--musgo)}
   #f-artista::placeholder{color:var(--ink-dim)}
+  #chips{display:none; gap:8px; flex-wrap:wrap; padding:10px 22px; border-bottom:1px solid var(--line)}
+  #chips.on{display:flex}
+  .chipf{
+    display:inline-flex; align-items:center; gap:7px; font-size:11px;
+    background:var(--panel); border:1px solid var(--musgo-dim); border-radius:2px; padding:3px 8px;
+  }
+  .chipf .dim{color:var(--ink-dim)}
+  .chipf .x{cursor:pointer; color:var(--ink-dim); padding:0 2px}
+  .chipf .x:hover{color:var(--naranja)}
   #grafica{display:block; width:100%; height:340px; cursor:crosshair}
   #tabla{padding:16px 22px 40px; display:none}
   #tabla .acciones{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px}
@@ -115,7 +124,7 @@
     <div class="ctl">vista
       <div class="opts">
         <button data-vista="grafica" class="on">línea de tiempo</button>
-        <button data-vista="tabla">tabla de líneas</button>
+        <button data-vista="tabla">índices</button>
       </div>
     </div>
     <div class="ctl">línea
@@ -139,6 +148,8 @@
     <div id="leyenda"></div>
   </div>
 
+  <div id="chips"></div>
+
   <canvas id="grafica"></canvas>
   <div id="tip"></div>
 
@@ -158,7 +169,7 @@
 <script>
 'use strict';
 // ============================================================
-// FORJA · adquisiciones MALI — núcleo puro (sin DOM, sin canvas)
+// FORJA · adquisiciones MALI — núcleo puro v3 (sin DOM, sin canvas)
 // Se embebe verbatim en index.html. Testeable en Node.
 // ============================================================
 
@@ -168,21 +179,104 @@ const ETIQ_TIPO = {
   comision: 'Comisión', otro: 'Institucional / s. e.',
 };
 
-// clasificaciones más numerosas; el resto colapsa en "Otros"
+// ---------- dimensiones indexables ----------
+const DIMS = [
+  { clave: 'li',  etiqueta: 'línea de adquisición' },
+  { clave: 'ar',  etiqueta: 'artista',            vacio: '(sin artista)' },
+  { clave: 'cu',  etiqueta: 'cultura',            vacio: '(sin cultura)' },
+  { clave: 'cl',  etiqueta: 'clasificación' },
+  { clave: 'te',  etiqueta: 'técnica',            vacio: '(sin técnica)' },
+  { clave: 'pe',  etiqueta: 'periodo de creación' },
+  { clave: 'dec', etiqueta: 'década de ingreso' },
+  { clave: 'tc',  etiqueta: 'tipo de ingreso' },
+];
+const DIM_POR_CLAVE = Object.fromEntries(DIMS.map(d => [d.clave, d]));
+
+// valor de una obra en una dimensión (con derivadas y baldes de vacío)
+function valorDim(o, clave) {
+  if (clave === 'dec') {
+    if (o.a === null) return 'Fondo histórico';
+    const d = Math.floor(o.a / 10) * 10;
+    return d + '\u2013' + String(d + 9).slice(2);
+  }
+  if (clave === 'tc') return ETIQ_TIPO[o.tc] || o.tc;
+  const v = o[clave];
+  if (v) return v;
+  return (DIM_POR_CLAVE[clave] && DIM_POR_CLAVE[clave].vacio) || '(sin dato)';
+}
+
+// ---------- búsqueda y filtros componibles ----------
+function normalizarTexto(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+// filtros: objeto {claveDim: valor}; consulta: texto sobre auN (artista/cultura)
+function filtrarDatos(datos, filtros, consulta) {
+  const q = normalizarTexto(consulta || '').trim();
+  const claves = Object.keys(filtros || {}).filter(k => filtros[k]);
+  return datos.filter(o => {
+    for (const k of claves) if (valorDim(o, k) !== filtros[k]) return false;
+    return !q || (o.auN && o.auN.includes(q));
+  });
+}
+
+// ---------- índice agregado por dimensión ----------
+function indiceAgregado(datos, clave) {
+  const grupos = new Map();
+  for (const o of datos) {
+    const v = valorDim(o, clave);
+    if (!grupos.has(v))
+      grupos.set(v, { valor: v, n: 0, lotes: new Set(), a0: null, a1: null, nHist: 0, nExpo: 0 });
+    const g = grupos.get(v);
+    g.n++; g.nExpo += o.ex;
+    if (o.a === null) { g.nHist++; continue; }
+    g.lotes.add(o.a + '.' + o.l);
+    if (g.a0 === null || o.a < g.a0) g.a0 = o.a;
+    if (g.a1 === null || o.a > g.a1) g.a1 = o.a;
+  }
+  const out = Array.from(grupos.values()).map(g => ({
+    valor: g.valor, n: g.n, nLotes: g.lotes.size,
+    a0: g.a0, a1: g.a1, nHist: g.nHist, nExpo: g.nExpo,
+  }));
+  out.sort((x, y) => (y.n - x.n) || x.valor.localeCompare(y.valor, 'es'));
+  return out;
+}
+
+function ordenarFilas(filas, col, desc) {
+  const f = filas.slice();
+  f.sort((x, y) => {
+    let r;
+    if (col === 'valor') r = x.valor.localeCompare(y.valor, 'es');
+    else r = (x[col] === null) - (y[col] === null) || (x[col] ?? 0) - (y[col] ?? 0);
+    return desc ? -r : r;
+  });
+  return f;
+}
+
+function csvIndice(filas, etiquetaDim) {
+  const esc = (v) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const cab = [etiquetaDim.replace(/\s+/g, '_'), 'obras', 'lotes', 'primer_anio',
+               'ultimo_anio', 'fondo_historico', 'en_exposicion'];
+  const filasTxt = filas.map(f => [f.valor, f.n, f.nLotes, f.a0 ?? '', f.a1 ?? '',
+                                   f.nHist, f.nExpo].map(esc).join(','));
+  return cab.join(',') + '\n' + filasTxt.join('\n') + '\n';
+}
+
+// ---------- serie temporal ----------
 function topClasificaciones(datos, n) {
   const c = new Map();
   for (const o of datos) c.set(o.cl, (c.get(o.cl) || 0) + 1);
   return Array.from(c.entries()).sort((x, y) => y[1] - x[1]).slice(0, n).map(e => e[0]);
 }
 
-// clave de segmento de una obra según el modo de apilado
 function claveSegmento(obra, modo, tops) {
   if (modo === 'tipo') return obra.tc;
   return tops.includes(obra.cl) ? obra.cl : 'Otros';
 }
 
-// serie anual: [{a, total, seg:{clave:n}}] para años con ingresos,
-// más el bloque histórico (sin año) agregado aparte.
 function serieAnual(datos, modo, tops) {
   const porAnio = new Map();
   const hist = { total: 0, seg: {} };
@@ -200,7 +294,6 @@ function serieAnual(datos, modo, tops) {
   return { anios, hist };
 }
 
-// rango continuo de años (para que los vacíos se vean como vacíos)
 function rangoAnios(anios) {
   if (!anios.length) return [];
   const a0 = anios[0].a, a1 = anios[anios.length - 1].a;
@@ -210,7 +303,6 @@ function rangoAnios(anios) {
   return out;
 }
 
-// lotes de un año, ordenados por tamaño descendente
 function lotesDeAnio(datos, anio) {
   const porLote = new Map();
   for (const o of datos) {
@@ -230,7 +322,6 @@ function lotesDeAnio(datos, anio) {
   return out;
 }
 
-// grupos del fondo histórico (sin año), por línea de crédito
 function gruposHistorico(datos) {
   const porCred = new Map();
   for (const o of datos) {
@@ -246,70 +337,6 @@ function gruposHistorico(datos) {
   return out;
 }
 
-// normalización para búsqueda: minúsculas y sin tildes
-function normalizarTexto(s) {
-  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
-// filtro combinado: línea de adquisición + consulta sobre artista/cultura
-// (las obras llevan auN precalculado: au normalizado)
-function filtrarDatos(datos, linea, consulta) {
-  const q = normalizarTexto(consulta || '').trim();
-  return datos.filter(o =>
-    (!linea || o.li === linea) &&
-    (!q || (o.auN && o.auN.includes(q))));
-}
-
-// tabla de líneas de adquisición: una fila por línea canónica
-function lineasAgregadas(datos) {
-  const porLinea = new Map();
-  for (const o of datos) {
-    if (!porLinea.has(o.li))
-      porLinea.set(o.li, { linea: o.li, n: 0, tipos: new Map(), lotes: new Set(),
-                           a0: null, a1: null, nHist: 0 });
-    const g = porLinea.get(o.li);
-    g.n++;
-    g.tipos.set(o.tc, (g.tipos.get(o.tc) || 0) + 1);
-    if (o.a === null) { g.nHist++; continue; }
-    g.lotes.add(o.a + '.' + o.l);
-    if (g.a0 === null || o.a < g.a0) g.a0 = o.a;
-    if (g.a1 === null || o.a > g.a1) g.a1 = o.a;
-  }
-  const out = Array.from(porLinea.values()).map(g => ({
-    linea: g.linea, n: g.n,
-    tipo: Array.from(g.tipos.entries()).sort((x, y) => y[1] - x[1])[0][0],
-    nLotes: g.lotes.size, a0: g.a0, a1: g.a1, nHist: g.nHist,
-  }));
-  out.sort((x, y) => (y.n - x.n) || x.linea.localeCompare(y.linea, 'es'));
-  return out;
-}
-
-// ordenar filas de la tabla por columna
-function ordenarLineas(filas, col, desc) {
-  const f = filas.slice();
-  f.sort((x, y) => {
-    let r;
-    if (col === 'linea') r = x.linea.localeCompare(y.linea, 'es');
-    else if (col === 'tipo') r = String(x.tipo).localeCompare(String(y.tipo), 'es');
-    else r = (x[col] === null) - (y[col] === null) || (x[col] ?? 0) - (y[col] ?? 0);
-    return desc ? -r : r;
-  });
-  return f;
-}
-
-// CSV de la tabla (separador coma, comillas escapadas)
-function csvLineas(filas, etiquetasTipo) {
-  const esc = (v) => {
-    const s = String(v ?? '');
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  };
-  const cab = ['linea', 'tipo', 'obras', 'lotes', 'primer_anio', 'ultimo_anio', 'fondo_historico'];
-  const filasTxt = filas.map(f => [f.linea, etiquetasTipo[f.tipo] || f.tipo, f.n,
-    f.nLotes, f.a0 ?? '', f.a1 ?? '', f.nHist].map(esc).join(','));
-  return cab.join(',') + '\n' + filasTxt.join('\n') + '\n';
-}
-
-// escala de altura: lineal o raíz cuadrada (para que 2008 no aplaste el resto)
 function escalar(valor, max, modo) {
   if (max <= 0) return 0;
   if (modo === 'raiz') return Math.sqrt(valor) / Math.sqrt(max);
@@ -317,17 +344,28 @@ function escalar(valor, max, modo) {
 }
 
 'use strict';
-/* FORJA · adquisiciones MALI — interfaz. El núcleo puro (NUCLEO) va inlineado antes. */
+/* FORJA · adquisiciones MALI — interfaz v3. El núcleo puro va inlineado antes. */
 (function(){
   const $ = (id) => document.getElementById(id);
+
+  // ---------- guardia de esquema ----------
+  if (!Array.isArray(typeof DATOS !== 'undefined' ? DATOS : null) || !DATOS.length ||
+      !('li' in DATOS[0]) || !('pe' in DATOS[0])){
+    $('resumen').textContent =
+      'datos.js no coincide con esta versión de la herramienta: vuelve a subir el datos.js actual junto a index.html.';
+    $('resumen').style.color = '#c08a5a';
+    return;
+  }
+
   const cv = $('grafica'), ctx = cv.getContext('2d'), tip = $('tip');
 
   // ---------- estado ----------
-  const est = { modo: 'tipo', escala: 'lineal', sel: null,   // sel: año (número) o 'hist'
-                linea: '', artista: '', vista: 'grafica', ordCol: 'n', ordDesc: true };
-  for (const o of DATOS) o.auN = normalizarTexto(o.au);   // índice de búsqueda, una sola vez
-  function datosF(){ return filtrarDatos(DATOS, est.linea, est.artista); }
+  const est = { modo: 'tipo', escala: 'lineal', sel: null,      // sel: año o 'hist'
+                vista: 'grafica', dim: 'li', ordCol: 'n', ordDesc: true,
+                artista: '', filtros: {} };                      // filtros: {claveDim: valor}
+  for (const o of DATOS) o.auN = normalizarTexto(o.au);
   const TOPS = topClasificaciones(DATOS, 6);
+  function datosF(){ return filtrarDatos(DATOS, est.filtros, est.artista); }
 
   const COLORES_TIPO = { donacion:'#8fa676', comite:'#4f6b82', compra:'#b06a36',
                          comision:'#c08a5a', otro:'#8a8c78' };
@@ -339,32 +377,66 @@ function escalar(valor, max, modo) {
     return TOPS.concat(['Otros']).map((c,i) => ({ clave:c, etiqueta:c, color:PALETA_CL[i] }));
   }
 
-  // ---------- resumen y leyenda ----------
-  actualizarResumen();
+  function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  // ---------- resumen ----------
   function actualizarResumen(){
     const D = datosF();
     const S = serieAnual(D, 'tipo', TOPS);
     const nExpo = D.reduce((n,o)=>n+o.ex,0);
     const rango = S.anios.length ? S.anios[0].a + '–' + S.anios[S.anios.length-1].a : 'sin años';
+    const partes = Object.entries(est.filtros).filter(([,v])=>v).map(([,v])=>v);
+    if (est.artista.trim()) partes.push('“' + est.artista.trim() + '”');
     $('resumen').textContent =
-      (est.linea ? est.linea + ' · ' : '') +
-      (est.artista.trim() ? '“' + est.artista.trim() + '” · ' : '') +
+      (partes.length ? partes.join(' · ') + ' — ' : '') +
       D.length.toLocaleString('es') + ' obras · ingresos ' + rango +
       ' en ' + new Set(D.filter(o=>o.a).map(o=>o.a+'.'+o.l)).size + ' lotes · fondo histórico: ' +
       S.hist.total.toLocaleString('es') + ' · en exposición: ' +
       nExpo.toLocaleString('es') + (D.length ? ' (' + (100*nExpo/D.length).toFixed(1) + '%)' : '');
   }
 
+  // ---------- chips de filtros activos ----------
+  function pintarChips(){
+    const cont = $('chips');
+    const activos = Object.entries(est.filtros).filter(([,v])=>v);
+    cont.classList.toggle('on', activos.length > 0);
+    cont.innerHTML = activos.map(([k,v]) =>
+      '<span class="chipf"><span class="dim">'+esc(DIM_POR_CLAVE[k].etiqueta)+'</span>'+
+      esc(v.length>50 ? v.slice(0,50)+'…' : v)+
+      '<span class="x" data-quitar="'+esc(k)+'" title="quitar filtro">×</span></span>').join('');
+    cont.querySelectorAll('[data-quitar]').forEach(x => x.addEventListener('click', ()=>{
+      delete est.filtros[x.dataset.quitar];
+      if (x.dataset.quitar === 'li') $('f-linea').value = '';
+      refrescar();
+    }));
+  }
+
+  function ponerFiltro(clave, valor){
+    if (est.filtros[clave] === valor) delete est.filtros[clave];
+    else est.filtros[clave] = valor;
+    if (clave === 'li') $('f-linea').value = est.filtros.li || '';
+    est.sel = null;
+    refrescar();
+  }
+
+  function refrescar(){
+    actualizarResumen(); pintarChips(); pintarLeyenda(); pintar(); pintarTabla();
+    if (est.sel === null)
+      $('detalle').innerHTML = '<div class="vacio">Haz clic en un año — o en el bloque FH — para ver sus lotes y obras.</div>';
+  }
+
+  // ---------- leyenda ----------
   function pintarLeyenda(){
     $('leyenda').innerHTML = segmentos().map(s =>
-      '<span class="lg"><i style="background:'+s.color+'"></i>'+s.etiqueta+'</span>').join('');
+      '<span class="lg"><i style="background:'+s.color+'"></i>'+esc(s.etiqueta)+'</span>').join('');
   }
 
   // ---------- gráfica (canvas) ----------
-  let barras = [];   // hit-test: {x,y,w,h, tipo:'anio'|'hist', valor, dato}
+  let barras = [];
   const M = { t:18, r:16, b:34, l:16, gapFH:26 };
 
   function pintar(){
+    if (est.vista !== 'grafica') return;
     const dpr = window.devicePixelRatio || 1;
     const W = cv.clientWidth, H = 340;
     cv.width = W*dpr; cv.height = H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -374,24 +446,24 @@ function escalar(valor, max, modo) {
     const segs = segmentos();
     const { anios, hist } = serieAnual(datosF(), est.modo, TOPS);
     const serie = rangoAnios(anios);
-    const maxA = Math.max(...serie.map(y=>y.total), hist.total);
     const altura = H - M.t - M.b;
-
-    // ancho: bloque FH + gap + n años
-    const n = serie.length;
+    if (!serie.length && !hist.total){
+      ctx.fillStyle = '#8a8c78'; ctx.font = '11px Fira Code, monospace'; ctx.textAlign='center';
+      ctx.fillText('sin obras bajo los filtros actuales', W/2, H/2);
+      return;
+    }
+    const maxA = Math.max(...serie.map(y=>y.total), hist.total, 1);
+    const n = Math.max(serie.length, 1);
     const anchoUtil = W - M.l - M.r - M.gapFH;
-    const bw = anchoUtil / (n + 2);          // FH ocupa 2 anchos de barra
+    const bw = anchoUtil / (n + 2);
     const fhW = bw*2;
 
-    // --- bloque fondo histórico ---
     const fhH = escalar(hist.total, maxA, est.escala) * altura;
-    const fhX = M.l, fhY = M.t + altura - fhH;
-    apilar(fhX, fhY, fhW-3, fhH, hist, segs, true);
+    apilar(M.l, M.t + altura - fhH, fhW-3, fhH, hist, segs, true);
     ctx.fillStyle = '#8a8c78'; ctx.font = '10px Fira Code, monospace'; ctx.textAlign='center';
-    ctx.fillText('FH', fhX + fhW/2 - 1, H - M.b + 14);
-    barras.push({ x:fhX, y:M.t, w:fhW-3, h:altura, tipo:'hist', dato:hist });
+    ctx.fillText('FH', M.l + fhW/2 - 1, H - M.b + 14);
+    barras.push({ x:M.l, y:M.t, w:fhW-3, h:altura, tipo:'hist', dato:hist });
 
-    // --- barras anuales ---
     serie.forEach((y, i) => {
       const x = M.l + fhW + M.gapFH + i*bw;
       const h = escalar(y.total, maxA, est.escala) * altura;
@@ -405,22 +477,19 @@ function escalar(valor, max, modo) {
       }
     });
 
-    // línea base
     ctx.strokeStyle = '#33352a';
     ctx.beginPath(); ctx.moveTo(M.l, M.t+altura+.5); ctx.lineTo(W-M.r, M.t+altura+.5); ctx.stroke();
 
-    // selección
     const selB = barras.find(b => (b.tipo==='hist' && est.sel==='hist') ||
                                   (b.tipo==='anio' && b.dato.a===est.sel));
     if (selB){
-      ctx.strokeStyle = '#d8d6c4'; ctx.lineWidth = 1;
+      ctx.strokeStyle = '#d8d6c4';
       ctx.strokeRect(selB.x-.5, M.t-.5, selB.w+1, altura+1);
-      ctx.lineWidth = 1;
     }
   }
 
   function apilar(x, yTop, w, hTotal, dato, segs, esHist){
-    if (dato.total === 0) return;
+    if (!dato.total) return;
     let acum = 0;
     for (const s of segs){
       const v = dato.seg[s.clave] || 0;
@@ -446,7 +515,7 @@ function escalar(valor, max, modo) {
     const segs = segmentos();
     const titulo = b.tipo==='hist' ? 'Fondo histórico' : b.dato.a;
     const filas = segs.filter(s=>b.dato.seg[s.clave])
-      .map(s=>'<div class="fila"><span>'+s.etiqueta+'</span><b>'+
+      .map(s=>'<div class="fila"><span>'+esc(s.etiqueta)+'</span><b>'+
               b.dato.seg[s.clave].toLocaleString('es')+'</b></div>').join('');
     tip.innerHTML = '<b>'+titulo+'</b> · '+b.dato.total.toLocaleString('es')+' obras'+filas;
     tip.style.display='block';
@@ -462,8 +531,6 @@ function escalar(valor, max, modo) {
   });
 
   // ---------- panel de detalle ----------
-  function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
   function filaObra(o){
     const url = 'https://coleccion.mali.pe/objects/'+o.id+'/'+encodeURIComponent(o.slug);
     return '<div class="obra"><span class="cod">'+esc(o.cod)+'</span>'+
@@ -478,7 +545,7 @@ function escalar(valor, max, modo) {
     det.innerHTML = '<summary><span class="cod">'+esc(cod)+'</span>'+
       '<span class="nn">'+n.toLocaleString('es')+' obra'+(n===1?'':'s')+'</span>'+
       '<span class="cr">'+esc(credito)+'</span></summary>';
-    let cargado = false;               // las obras se montan recién al abrir (lotes de 1.600+)
+    let cargado = false;
     det.addEventListener('toggle', ()=>{
       if (!det.open || cargado) return;
       const cont = document.createElement('div');
@@ -512,79 +579,80 @@ function escalar(valor, max, modo) {
     bloques.forEach(b => det.appendChild(b));
   }
 
-  // ---------- filtro por línea ----------
-  const LINEAS = lineasAgregadas(DATOS);
+  // ---------- filtro rápido por línea + búsqueda por artista ----------
   const selLinea = $('f-linea');
-  for (const f of LINEAS){
+  for (const f of indiceAgregado(DATOS, 'li')){
     const op = document.createElement('option');
-    op.value = f.linea;
-    op.textContent = f.linea.slice(0,60) + ' (' + f.n.toLocaleString('es') + ')';
+    op.value = f.valor;
+    op.textContent = f.valor.slice(0,60) + ' (' + f.n.toLocaleString('es') + ')';
     selLinea.appendChild(op);
   }
   selLinea.addEventListener('change', ()=>{
-    est.linea = selLinea.value;
+    if (selLinea.value) est.filtros.li = selLinea.value; else delete est.filtros.li;
     est.sel = null;
-    $('detalle').innerHTML = '<div class="vacio">Haz clic en un año — o en el bloque FH — para ver sus lotes y obras.</div>';
-    actualizarResumen(); pintar(); pintarTabla();
+    refrescar();
   });
 
-  // ---------- búsqueda por artista/cultura ----------
   const inArtista = $('f-artista');
   let debArtista;
   inArtista.addEventListener('input', ()=>{
     clearTimeout(debArtista);
-    debArtista = setTimeout(()=>{
-      est.artista = inArtista.value;
-      est.sel = null;
-      $('detalle').innerHTML = '<div class="vacio">Haz clic en un año — o en el bloque FH — para ver sus lotes y obras.</div>';
-      actualizarResumen(); pintar(); pintarTabla();
-    }, 150);
+    debArtista = setTimeout(()=>{ est.artista = inArtista.value; est.sel = null; refrescar(); }, 150);
   });
 
-  // ---------- vista tabla ----------
-  const COLS = [['linea','línea de adquisición',0],['tipo','tipo',0],['n','obras',1],
-                ['nLotes','lotes',1],['a0','desde',1],['a1','hasta',1],['nHist','f. hist.',1]];
-  function colorTipo(t){ return COLORES_TIPO[t] || '#8a8c78'; }
+  // ---------- vista índices ----------
+  const COLS = [['valor','',0],['n','obras',1],['nLotes','lotes',1],['a0','desde',1],
+                ['a1','hasta',1],['nHist','f. hist.',1],['nExpo','expo',1],['pExpo','% expo',1]];
   function pintarTabla(){
     if (est.vista !== 'tabla') return;
-    const filas = ordenarLineas(lineasAgregadas(datosF()), est.ordCol, est.ordDesc);
+    const dim = DIM_POR_CLAVE[est.dim];
+    let filas = indiceAgregado(datosF(), est.dim).map(f =>
+      Object.assign({ pExpo: f.n ? +(100*f.nExpo/f.n).toFixed(1) : 0 }, f));
+    filas = ordenarFilas(filas, est.ordCol, est.ordDesc);
+
+    const opciones = DIMS.map(d =>
+      '<option value="'+d.clave+'"'+(d.clave===est.dim?' selected':'')+'>'+esc(d.etiqueta)+'</option>').join('');
     const cab = COLS.map(([c,lab,num]) =>
-      '<th class="'+(num?'num':'')+'" data-col="'+c+'">'+lab+
+      '<th class="'+(num?'num':'')+'" data-col="'+c+'">'+(c==='valor'?esc(dim.etiqueta):lab)+
       (est.ordCol===c ? ' <span class="dir">'+(est.ordDesc?'▾':'▴')+'</span>' : '')+'</th>').join('');
     const cuerpo = filas.map(f =>
-      '<tr data-linea="'+esc(f.linea)+'"'+(est.linea===f.linea?' class="sel"':'')+'>'+
-      '<td><span class="chip" style="background:'+colorTipo(f.tipo)+'"></span>'+esc(f.linea)+'</td>'+
-      '<td>'+(ETIQ_TIPO[f.tipo]||f.tipo)+'</td>'+
+      '<tr data-valor="'+esc(f.valor)+'"'+(est.filtros[est.dim]===f.valor?' class="sel"':'')+'>'+
+      '<td>'+esc(f.valor)+'</td>'+
       '<td class="num">'+f.n.toLocaleString('es')+'</td>'+
       '<td class="num">'+(f.nLotes||'—')+'</td>'+
       '<td class="num">'+(f.a0??'—')+'</td>'+
       '<td class="num">'+(f.a1??'—')+'</td>'+
-      '<td class="num">'+(f.nHist||'—')+'</td></tr>').join('');
+      '<td class="num">'+(f.nHist||'—')+'</td>'+
+      '<td class="num">'+(f.nExpo||'—')+'</td>'+
+      '<td class="num">'+f.pExpo.toLocaleString('es')+'%</td></tr>').join('');
     $('tabla').innerHTML =
-      '<div class="acciones"><span class="nfo">'+filas.length+' líneas de adquisición · clic en cabecera ordena · clic en fila filtra</span>'+
+      '<div class="acciones"><span class="nfo">índice por <select id="dim">'+opciones+'</select> · '+
+      filas.length+' filas · clic en cabecera ordena · clic en fila filtra</span>'+
       '<button id="csv">exportar CSV</button></div>'+
       '<table><thead><tr>'+cab+'</tr></thead><tbody>'+cuerpo+'</tbody></table>';
+
+    $('dim').addEventListener('change', ()=>{
+      est.dim = $('dim').value; est.ordCol = 'n'; est.ordDesc = true; pintarTabla();
+    });
     $('tabla').querySelectorAll('thead th').forEach(th => th.addEventListener('click', ()=>{
       const c = th.dataset.col;
       if (est.ordCol === c) est.ordDesc = !est.ordDesc;
-      else { est.ordCol = c; est.ordDesc = (c !== 'linea' && c !== 'tipo'); }
+      else { est.ordCol = c; est.ordDesc = (c !== 'valor'); }
       pintarTabla();
     }));
     $('tabla').querySelectorAll('tbody tr').forEach(tr => tr.addEventListener('click', ()=>{
-      const l = tr.dataset.linea;
-      est.linea = (est.linea === l) ? '' : l;
-      selLinea.value = est.linea;
-      est.sel = null;
-      actualizarResumen(); pintar(); pintarTabla();
+      ponerFiltro(est.dim, tr.dataset.valor);
     }));
     $('csv').addEventListener('click', ()=>{
-      const csv = csvLineas(ordenarLineas(lineasAgregadas(datosF()), est.ordCol, est.ordDesc), ETIQ_TIPO);
+      const csv = csvIndice(filas, dim.etiqueta);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8'}));
-      a.download = 'mali_lineas_adquisicion.csv';
+      a.download = 'mali_indice_' + est.dim + '.csv';
       a.click(); URL.revokeObjectURL(a.href);
     });
   }
+
+  // ---------- vistas y controles ----------
   function cambiarVista(v){
     est.vista = v;
     $('grafica').style.display = v==='grafica' ? 'block' : 'none';
@@ -596,8 +664,6 @@ function escalar(valor, max, modo) {
     document.querySelectorAll('[data-vista]').forEach(x=>x.classList.toggle('on', x===b));
     cambiarVista(b.dataset.vista);
   }));
-
-  // ---------- controles ----------
   document.querySelectorAll('[data-modo]').forEach(b => b.addEventListener('click', ()=>{
     document.querySelectorAll('[data-modo]').forEach(x=>x.classList.toggle('on', x===b));
     est.modo = b.dataset.modo; pintarLeyenda(); pintar();
@@ -609,8 +675,7 @@ function escalar(valor, max, modo) {
   $('titulo').addEventListener('click', ()=> location.reload());
   window.addEventListener('resize', pintar);
 
-  pintarLeyenda();
-  pintar();
+  refrescar();
 })();
 </script>
 </body>
