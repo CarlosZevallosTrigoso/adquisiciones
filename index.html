@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FORJA · adquisiciones MALI</title>
+<style>
+  :root{
+    --bg:#16170f; --panel:#1f2017; --line:#33352a;
+    --ink:#d8d6c4; --ink-dim:#8a8c78;
+    --musgo:#8fa676; --musgo-dim:#5c6b4b; --acero:#4f6b82; --naranja:#b06a36; --arena:#c08a5a;
+    --mono:"Fira Code", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg); color:var(--ink); font-family:var(--mono); font-size:12px; line-height:1.55}
+  a{color:var(--musgo); text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  header{padding:18px 22px 12px; border-bottom:1px solid var(--line)}
+  header h1{margin:0; font-size:13px; font-weight:600; letter-spacing:.18em; cursor:pointer; display:inline-block}
+  header h1:hover{color:var(--musgo)}
+  header p{margin:4px 0 0; color:var(--ink-dim); font-size:11px}
+
+  #controles{display:flex; gap:20px; flex-wrap:wrap; align-items:center; padding:12px 22px; border-bottom:1px solid var(--line)}
+  .ctl{display:flex; gap:8px; align-items:center; color:var(--ink-dim); font-size:11px}
+  .ctl .opts{display:flex; border:1px solid var(--line); border-radius:2px; overflow:hidden}
+  .ctl button{
+    font-family:var(--mono); font-size:11px; padding:4px 10px; cursor:pointer;
+    background:#12130c; color:var(--ink-dim); border:none; border-right:1px solid var(--line);
+  }
+  .ctl button:last-child{border-right:none}
+  .ctl button.on{background:var(--musgo-dim); color:#0e0f08; font-weight:600}
+  .ctl button:hover:not(.on){color:var(--musgo)}
+  #leyenda{display:flex; gap:14px; flex-wrap:wrap; margin-left:auto}
+  .lg{display:flex; gap:6px; align-items:center; color:var(--ink-dim); font-size:10px}
+  .lg i{width:10px; height:10px; border-radius:2px; display:inline-block}
+
+  #grafica{display:block; width:100%; height:340px; cursor:crosshair}
+  #tip{
+    position:fixed; pointer-events:none; display:none; z-index:10;
+    background:var(--panel); border:1px solid var(--line); border-radius:2px;
+    padding:8px 10px; font-size:11px; max-width:280px; box-shadow:0 6px 20px #000a;
+  }
+  #tip b{color:var(--musgo)}
+  #tip .fila{display:flex; justify-content:space-between; gap:14px; color:var(--ink-dim)}
+  #tip .fila b{color:var(--ink); font-weight:400}
+
+  #detalle{padding:16px 22px 40px; max-width:980px}
+  #detalle .vacio{color:var(--ink-dim); padding:20px 0}
+  #detalle h2{font-size:12px; letter-spacing:.1em; margin:6px 0 2px}
+  #detalle h2 .n{color:var(--musgo)}
+  #detalle .sub{color:var(--ink-dim); font-size:11px; margin-bottom:12px}
+  details.lote{border:1px solid var(--line); border-radius:2px; margin:8px 0; background:var(--panel)}
+  details.lote summary{
+    padding:9px 12px; cursor:pointer; list-style:none; display:flex; gap:12px; align-items:baseline;
+  }
+  details.lote summary::-webkit-details-marker{display:none}
+  details.lote summary .cod{color:var(--musgo); min-width:7ch}
+  details.lote summary .nn{color:var(--ink); min-width:9ch}
+  details.lote summary .cr{color:var(--ink-dim); flex:1}
+  details.lote[open] summary{border-bottom:1px solid var(--line)}
+  .obra{
+    display:grid; grid-template-columns:13ch 1fr 1fr 11ch; gap:10px;
+    padding:5px 12px; border-bottom:1px solid #24261c; font-size:11px;
+  }
+  .obra:last-child{border-bottom:none}
+  .obra .cod{color:var(--ink-dim)}
+  .obra .cl{color:var(--ink-dim); text-align:right}
+  .obra .expo{color:var(--arena)}
+  @media (max-width:700px){ .obra{grid-template-columns:1fr 1fr} .obra .cod,.obra .cl{display:none} }
+
+  footer{padding:14px 22px; border-top:1px solid var(--line); color:var(--ink-dim); font-size:10px}
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="titulo">FORJA · ADQUISICIONES MALI</h1>
+    <p id="resumen">cargando…</p>
+  </header>
+
+  <div id="controles">
+    <div class="ctl">apilar por
+      <div class="opts">
+        <button data-modo="tipo" class="on">tipo de ingreso</button>
+        <button data-modo="clasificacion">clasificación</button>
+      </div>
+    </div>
+    <div class="ctl">escala
+      <div class="opts">
+        <button data-escala="lineal" class="on">lineal</button>
+        <button data-escala="raiz">raíz</button>
+      </div>
+    </div>
+    <div id="leyenda"></div>
+  </div>
+
+  <canvas id="grafica"></canvas>
+  <div id="tip"></div>
+
+  <section id="detalle">
+    <div class="vacio">Haz clic en un año — o en el bloque FH (fondo histórico) — para ver sus lotes y obras.</div>
+  </section>
+
+  <footer>
+    Fuente: coleccion.mali.pe (eMuseum) · datos recolectados en agosto de 2026 ·
+    el año de ingreso proviene del código de inventario (AÑO.lote.ítem); la numeración
+    antigua (IV-*, V-*) se agrupa como fondo histórico
+  </footer>
+
+<script src="datos.js"></script>
+<script>
+'use strict';
+// ============================================================
+// FORJA · adquisiciones MALI — núcleo puro (sin DOM, sin canvas)
+// Se embebe verbatim en index.html. Testeable en Node.
+// ============================================================
+
+const TIPOS = ['donacion', 'comite', 'compra', 'comision', 'otro'];
+const ETIQ_TIPO = {
+  donacion: 'Donación', comite: 'Comité', compra: 'Compra / fondo',
+  comision: 'Comisión', otro: 'Institucional / s. e.',
+};
+
+// clasificaciones más numerosas; el resto colapsa en "Otros"
+function topClasificaciones(datos, n) {
+  const c = new Map();
+  for (const o of datos) c.set(o.cl, (c.get(o.cl) || 0) + 1);
+  return Array.from(c.entries()).sort((x, y) => y[1] - x[1]).slice(0, n).map(e => e[0]);
+}
+
+// clave de segmento de una obra según el modo de apilado
+function claveSegmento(obra, modo, tops) {
+  if (modo === 'tipo') return obra.tc;
+  return tops.includes(obra.cl) ? obra.cl : 'Otros';
+}
+
+// serie anual: [{a, total, seg:{clave:n}}] para años con ingresos,
+// más el bloque histórico (sin año) agregado aparte.
+function serieAnual(datos, modo, tops) {
+  const porAnio = new Map();
+  const hist = { total: 0, seg: {} };
+  for (const o of datos) {
+    const k = claveSegmento(o, modo, tops);
+    if (o.a === null) {
+      hist.total++; hist.seg[k] = (hist.seg[k] || 0) + 1;
+      continue;
+    }
+    if (!porAnio.has(o.a)) porAnio.set(o.a, { a: o.a, total: 0, seg: {} });
+    const y = porAnio.get(o.a);
+    y.total++; y.seg[k] = (y.seg[k] || 0) + 1;
+  }
+  const anios = Array.from(porAnio.values()).sort((x, y) => x.a - y.a);
+  return { anios, hist };
+}
+
+// rango continuo de años (para que los vacíos se vean como vacíos)
+function rangoAnios(anios) {
+  if (!anios.length) return [];
+  const a0 = anios[0].a, a1 = anios[anios.length - 1].a;
+  const idx = new Map(anios.map(y => [y.a, y]));
+  const out = [];
+  for (let a = a0; a <= a1; a++) out.push(idx.get(a) || { a, total: 0, seg: {} });
+  return out;
+}
+
+// lotes de un año, ordenados por tamaño descendente
+function lotesDeAnio(datos, anio) {
+  const porLote = new Map();
+  for (const o of datos) {
+    if (o.a !== anio) continue;
+    if (!porLote.has(o.l)) porLote.set(o.l, { lote: o.l, obras: [], creditos: new Map() });
+    const g = porLote.get(o.l);
+    g.obras.push(o);
+    g.creditos.set(o.cr, (g.creditos.get(o.cr) || 0) + 1);
+  }
+  const out = Array.from(porLote.values()).map(g => {
+    const credDominante = Array.from(g.creditos.entries()).sort((x, y) => y[1] - x[1])[0][0];
+    g.obras.sort((x, y) => x.cod.localeCompare(y.cod, 'es', { numeric: true }));
+    return { lote: g.lote, cod: anio + '.' + g.lote, n: g.obras.length,
+             credito: credDominante, nCreditos: g.creditos.size, obras: g.obras };
+  });
+  out.sort((x, y) => (y.n - x.n) || (x.lote - y.lote));
+  return out;
+}
+
+// grupos del fondo histórico (sin año), por línea de crédito
+function gruposHistorico(datos) {
+  const porCred = new Map();
+  for (const o of datos) {
+    if (o.a !== null) continue;
+    if (!porCred.has(o.cr)) porCred.set(o.cr, []);
+    porCred.get(o.cr).push(o);
+  }
+  const out = Array.from(porCred.entries()).map(([cr, obras]) => {
+    obras.sort((x, y) => x.cod.localeCompare(y.cod, 'es', { numeric: true }));
+    return { credito: cr, n: obras.length, obras };
+  });
+  out.sort((x, y) => y.n - x.n);
+  return out;
+}
+
+// escala de altura: lineal o raíz cuadrada (para que 2008 no aplaste el resto)
+function escalar(valor, max, modo) {
+  if (max <= 0) return 0;
+  if (modo === 'raiz') return Math.sqrt(valor) / Math.sqrt(max);
+  return valor / max;
+}
+
+'use strict';
+/* FORJA · adquisiciones MALI — interfaz. El núcleo puro (NUCLEO) va inlineado antes. */
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const cv = $('grafica'), ctx = cv.getContext('2d'), tip = $('tip');
+
+  // ---------- estado ----------
+  const est = { modo: 'tipo', escala: 'lineal', sel: null }; // sel: año (número) o 'hist'
+  const TOPS = topClasificaciones(DATOS, 6);
+
+  const COLORES_TIPO = { donacion:'#8fa676', comite:'#4f6b82', compra:'#b06a36',
+                         comision:'#c08a5a', otro:'#8a8c78' };
+  const PALETA_CL = ['#8fa676','#4f6b82','#b06a36','#c08a5a','#5c6b4b','#7a8ba0','#8a8c78'];
+
+  function segmentos(){
+    if (est.modo === 'tipo')
+      return TIPOS.map(t => ({ clave:t, etiqueta:ETIQ_TIPO[t], color:COLORES_TIPO[t] }));
+    return TOPS.concat(['Otros']).map((c,i) => ({ clave:c, etiqueta:c, color:PALETA_CL[i] }));
+  }
+
+  // ---------- resumen y leyenda ----------
+  const S = serieAnual(DATOS, est.modo, TOPS);
+  const nExpo = DATOS.reduce((n,o)=>n+o.ex,0);
+  $('resumen').textContent =
+    DATOS.length.toLocaleString('es') + ' obras · ingresos ' +
+    S.anios[0].a + '–' + S.anios[S.anios.length-1].a +
+    ' en ' + new Set(DATOS.filter(o=>o.a).map(o=>o.a+'.'+o.l)).size + ' lotes · fondo histórico: ' +
+    S.hist.total.toLocaleString('es') + ' obras · en exposición: ' +
+    nExpo.toLocaleString('es') + ' (' + (100*nExpo/DATOS.length).toFixed(1) + '%)';
+
+  function pintarLeyenda(){
+    $('leyenda').innerHTML = segmentos().map(s =>
+      '<span class="lg"><i style="background:'+s.color+'"></i>'+s.etiqueta+'</span>').join('');
+  }
+
+  // ---------- gráfica (canvas) ----------
+  let barras = [];   // hit-test: {x,y,w,h, tipo:'anio'|'hist', valor, dato}
+  const M = { t:18, r:16, b:34, l:16, gapFH:26 };
+
+  function pintar(){
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth, H = 340;
+    cv.width = W*dpr; cv.height = H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,W,H);
+    barras = [];
+
+    const segs = segmentos();
+    const { anios, hist } = serieAnual(DATOS, est.modo, TOPS);
+    const serie = rangoAnios(anios);
+    const maxA = Math.max(...serie.map(y=>y.total), hist.total);
+    const altura = H - M.t - M.b;
+
+    // ancho: bloque FH + gap + n años
+    const n = serie.length;
+    const anchoUtil = W - M.l - M.r - M.gapFH;
+    const bw = anchoUtil / (n + 2);          // FH ocupa 2 anchos de barra
+    const fhW = bw*2;
+
+    // --- bloque fondo histórico ---
+    const fhH = escalar(hist.total, maxA, est.escala) * altura;
+    const fhX = M.l, fhY = M.t + altura - fhH;
+    apilar(fhX, fhY, fhW-3, fhH, hist, segs, true);
+    ctx.fillStyle = '#8a8c78'; ctx.font = '10px Fira Code, monospace'; ctx.textAlign='center';
+    ctx.fillText('FH', fhX + fhW/2 - 1, H - M.b + 14);
+    barras.push({ x:fhX, y:M.t, w:fhW-3, h:altura, tipo:'hist', dato:hist });
+
+    // --- barras anuales ---
+    serie.forEach((y, i) => {
+      const x = M.l + fhW + M.gapFH + i*bw;
+      const h = escalar(y.total, maxA, est.escala) * altura;
+      if (y.total > 0) apilar(x, M.t + altura - h, Math.max(1,bw-2), h, y, segs, false);
+      barras.push({ x, y:M.t, w:Math.max(1,bw-2), h:altura, tipo:'anio', dato:y });
+      if (y.a % 10 === 0){
+        ctx.fillStyle = '#8a8c78'; ctx.textAlign='center';
+        ctx.fillText(String(y.a), x + bw/2, H - M.b + 14);
+        ctx.strokeStyle = '#33352a'; ctx.beginPath();
+        ctx.moveTo(x + bw/2, M.t + altura + 2); ctx.lineTo(x + bw/2, M.t + altura + 6); ctx.stroke();
+      }
+    });
+
+    // línea base
+    ctx.strokeStyle = '#33352a';
+    ctx.beginPath(); ctx.moveTo(M.l, M.t+altura+.5); ctx.lineTo(W-M.r, M.t+altura+.5); ctx.stroke();
+
+    // selección
+    const selB = barras.find(b => (b.tipo==='hist' && est.sel==='hist') ||
+                                  (b.tipo==='anio' && b.dato.a===est.sel));
+    if (selB){
+      ctx.strokeStyle = '#d8d6c4'; ctx.lineWidth = 1;
+      ctx.strokeRect(selB.x-.5, M.t-.5, selB.w+1, altura+1);
+      ctx.lineWidth = 1;
+    }
+  }
+
+  function apilar(x, yTop, w, hTotal, dato, segs, esHist){
+    if (dato.total === 0) return;
+    let acum = 0;
+    for (const s of segs){
+      const v = dato.seg[s.clave] || 0;
+      if (!v) continue;
+      const h = hTotal * (v / dato.total);
+      ctx.fillStyle = s.color;
+      ctx.globalAlpha = esHist ? .75 : 1;
+      ctx.fillRect(x, yTop + acum, w, Math.max(h, .5));
+      acum += h;
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- tooltip + selección ----------
+  function hit(ev){
+    const r = cv.getBoundingClientRect();
+    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    return barras.find(b => mx>=b.x && mx<=b.x+b.w && my>=b.y && my<=b.y+b.h);
+  }
+  cv.addEventListener('mousemove', (ev)=>{
+    const b = hit(ev);
+    if (!b || !b.dato.total){ tip.style.display='none'; return; }
+    const segs = segmentos();
+    const titulo = b.tipo==='hist' ? 'Fondo histórico' : b.dato.a;
+    const filas = segs.filter(s=>b.dato.seg[s.clave])
+      .map(s=>'<div class="fila"><span>'+s.etiqueta+'</span><b>'+
+              b.dato.seg[s.clave].toLocaleString('es')+'</b></div>').join('');
+    tip.innerHTML = '<b>'+titulo+'</b> · '+b.dato.total.toLocaleString('es')+' obras'+filas;
+    tip.style.display='block';
+    tip.style.left = Math.min(ev.clientX+14, window.innerWidth-300)+'px';
+    tip.style.top = (ev.clientY+14)+'px';
+  });
+  cv.addEventListener('mouseleave', ()=> tip.style.display='none');
+  cv.addEventListener('click', (ev)=>{
+    const b = hit(ev);
+    if (!b || !b.dato.total) return;
+    est.sel = b.tipo==='hist' ? 'hist' : b.dato.a;
+    pintar(); pintarDetalle();
+  });
+
+  // ---------- panel de detalle ----------
+  function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function filaObra(o){
+    const url = 'https://coleccion.mali.pe/objects/'+o.id+'/'+encodeURIComponent(o.slug);
+    return '<div class="obra"><span class="cod">'+esc(o.cod)+'</span>'+
+      '<span><a href="'+url+'" target="_blank" rel="noopener">'+esc(o.t)+'</a>'+
+      (o.ex ? ' <span class="expo" title="En exposición">●</span>' : '')+'</span>'+
+      '<span>'+esc(o.au)+'</span><span class="cl">'+esc(o.cl)+'</span></div>';
+  }
+
+  function bloqueLote(cod, n, credito, obras){
+    const det = document.createElement('details');
+    det.className = 'lote';
+    det.innerHTML = '<summary><span class="cod">'+esc(cod)+'</span>'+
+      '<span class="nn">'+n.toLocaleString('es')+' obra'+(n===1?'':'s')+'</span>'+
+      '<span class="cr">'+esc(credito)+'</span></summary>';
+    let cargado = false;               // las obras se montan recién al abrir (lotes de 1.600+)
+    det.addEventListener('toggle', ()=>{
+      if (!det.open || cargado) return;
+      const cont = document.createElement('div');
+      cont.innerHTML = obras.map(filaObra).join('');
+      det.appendChild(cont);
+      cargado = true;
+    });
+    return det;
+  }
+
+  function pintarDetalle(){
+    const det = $('detalle');
+    det.innerHTML = '';
+    let titulo, sub, bloques;
+    if (est.sel === 'hist'){
+      const grupos = gruposHistorico(DATOS);
+      const total = grupos.reduce((n,g)=>n+g.n,0);
+      titulo = 'Fondo histórico <span class="n">· '+total.toLocaleString('es')+' obras</span>';
+      sub = 'numeración antigua (IV-*, V-*), sin año de ingreso en el código · agrupado por línea de crédito';
+      bloques = grupos.map(g => bloqueLote('—', g.n, g.credito, g.obras));
+    } else {
+      const lotes = lotesDeAnio(DATOS, est.sel);
+      const total = lotes.reduce((n,l)=>n+l.n,0);
+      titulo = est.sel+' <span class="n">· '+total.toLocaleString('es')+' obras en '+
+               lotes.length+' lote'+(lotes.length===1?'':'s')+'</span>';
+      sub = 'lotes ordenados por tamaño · clic en un lote para ver sus obras · ● = en exposición';
+      bloques = lotes.map(l => bloqueLote(l.cod, l.n,
+        l.credito + (l.nCreditos>1 ? ' (+'+(l.nCreditos-1)+' líneas más)' : ''), l.obras));
+    }
+    det.insertAdjacentHTML('beforeend', '<h2>'+titulo+'</h2><div class="sub">'+sub+'</div>');
+    bloques.forEach(b => det.appendChild(b));
+  }
+
+  // ---------- controles ----------
+  document.querySelectorAll('[data-modo]').forEach(b => b.addEventListener('click', ()=>{
+    document.querySelectorAll('[data-modo]').forEach(x=>x.classList.toggle('on', x===b));
+    est.modo = b.dataset.modo; pintarLeyenda(); pintar();
+  }));
+  document.querySelectorAll('[data-escala]').forEach(b => b.addEventListener('click', ()=>{
+    document.querySelectorAll('[data-escala]').forEach(x=>x.classList.toggle('on', x===b));
+    est.escala = b.dataset.escala; pintar();
+  }));
+  $('titulo').addEventListener('click', ()=> location.reload());
+  window.addEventListener('resize', pintar);
+
+  pintarLeyenda();
+  pintar();
+})();
+</script>
+</body>
+</html>
